@@ -1,49 +1,35 @@
-# Parser de PDF de Exames - Salvador
+# LACS Parser — Extrator de Exames Salvador
 
-Este projeto contém um script Python simples para extrair os dados do paciente e os resultados de exames de arquivos PDF do laboratório central do município de Salvador.
+Aplicativo Streamlit que extrai resultados de exames de PDFs do LACS Salvador e gera uma string clínica compacta para copiar e colar.
 
-## Como usar
+## Uso
 
-1. Crie e ative uma virtualenv Python:
+Acesse o app, envie o PDF do laudo e copie a string gerada. Exemplo de saída:
+
+```
+Lab 29/10/24 hb=13,3 Leuco=2770 Plq=132mil glic=78 ct=102 HDL=28 LDL=63 TGC=54 cr=1,04 ur=25 tgo=24 tgp=14 ggt=17 fa=217 ...
+```
+
+Se o arquivo não corresponder ao formato LACS Salvador, o app exibe **"Nenhum exame reconhecido"**.
+
+## Formatos suportados
+
+| Formato | Identificação | Período |
+|---|---|---|
+| Padrão (`2402xxx` / `2502xxx`) | `Data do Cadastro:` | até 2024–2025 |
+| Novo (`7-NNN-NOME.pdf`) | `Data da coleta :` | 2025–atual |
+
+## Rodar localmente
 
 ```powershell
-cd c:\Users\gian\Desktop\exames
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-```
-
-2. Instale as dependências:
-
-```powershell
 pip install -r requirements.txt
+streamlit run app.py
 ```
 
-3. Execute o parser em um PDF:
+## Deploy no Streamlit Cloud
 
-```powershell
-python parse_salvador_pdf.py "exames-lacs\arquivo.pdf"
-```
-
-4. O script irá gerar um arquivo JSON no mesmo diretório do PDF com o mesmo nome base, por exemplo `arquivo.json`.
-
-## Opções
-
-- `-o` / `--output`: caminho opcional para o arquivo JSON de saída.
-
-```powershell
-python parse_salvador_pdf.py "exames-lacs\arquivo.pdf" -o "saida\resultado.json"
-```
-
-## Estrutura do JSON de saída
-
-O JSON contém:
-
-- `arquivo`: nome do arquivo PDF processado
-- `paciente`: informações extraídas do cabeçalho
-- `exames`: lista de pares `nome_exame` / `resultado`
-
-## Observações
-
-- O script usa `pdfplumber` para extrair texto do PDF.
-- Se o PDF não contiver texto pesquisável, pode ser necessário um passo adicional com OCR.
-- Ajustes nas expressões regulares podem ser necessários para diferentes formatos de relatório.
+1. Fork ou conecte este repositório no [Streamlit Cloud](https://streamlit.io/cloud)
+2. Defina o arquivo principal como `app.py`
+3. Clique em **Deploy** — as dependências são instaladas automaticamente via `requirements.txt`
