@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.pyc
+exames-lacs/
+exames-json/
+*.txt
+!requirements.txt
+*.json
+relatorio*.md
