@@ -1,9 +1,20 @@
-.venv/
+# Python
 __pycache__/
 *.pyc
-exames-lacs/
-exames-json/
+.venv/
+
+# Playwright
+.playwright-mcp/
+
+# Debug / dev output
 *.txt
-!requirements.txt
 *.json
+exames-json/
+exames-lacs/
 relatorio*.md
+raw_text_dump.txt
+
+# Dev scripts
+extract_exames.py
+parse_salvador_pdf.py
+test_formato_string.py
