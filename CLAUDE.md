@@ -20,9 +20,11 @@ Se `_assemble()` ou o formato de saída mudar, atualizar essa verificação em `
 ## Saída Unicode
 
 Scripts que imprimem texto extraído de PDFs (µ, γ, etc.) exigem:
+
 ```python
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 ```
+
 Adicionar no topo de qualquer script diagnóstico avulso.
 
 ## Estrutura do app Streamlit (app.py)
