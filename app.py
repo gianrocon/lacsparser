@@ -1,12 +1,14 @@
 import io
 import tempfile
 import textwrap
+from datetime import date as _date
 from pathlib import Path
 
 import streamlit as st
 from pypdf import PdfReader, PdfWriter
 from reportlab.pdfgen import canvas as rl_canvas
 
+import fill_pdf_overlay as rec
 from formato_string import build_string
 
 TEMPLATE_PDF = Path(__file__).parent / "Guia sem lista e radio.pdf"
@@ -27,6 +29,9 @@ EXAMES = [
 ]
 
 COL_SIZE = len(EXAMES) // 3 + (1 if len(EXAMES) % 3 else 0)
+
+# Exames restritos a particular/plano — nunca incluídos na guia SUS
+EXAMES_ESPECIAIS = ["Carga Viral HIV", "Contagem de Células CD4+"]
 
 ROTINA_BASICA = {
     "HEMOGRAMA", "URÉIA", "CREATININA", "TGO", "TGP",
@@ -128,6 +133,65 @@ def gerar_pdf_solicitacao(dados: dict, exames_sel: list) -> bytes:
     return out_buf.read()
 
 
+def _gerar_receita_bytes(nome: str, data: str, linhas: list, vias: int) -> bytes:
+    rec.NOME = nome
+    rec.DATA = data
+    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+        tmp_path = tmp.name
+    try:
+        rec.gerar_receita_paisagem(linhas, tmp_path, vias=vias)
+        with open(tmp_path, "rb") as f:
+            return f.read()
+    finally:
+        Path(tmp_path).unlink(missing_ok=True)
+
+
+def _gerar_exames_particular_bytes(nome: str, exames_sel: list) -> bytes:
+    rec.NOME = nome
+    rec.DATA = _date.today().strftime("%d/%m/%Y")
+    rec.EXAMES = exames_sel
+    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+        tmp_path = tmp.name
+    try:
+        rec.gerar_exames(tmp_path)
+        with open(tmp_path, "rb") as f:
+            return f.read()
+    finally:
+        Path(tmp_path).unlink(missing_ok=True)
+
+
+_MAX_MEDS_LINES = 24
+_MAX_MEDS_CHARS = 80
+
+
+def _validate_meds(meds_text: str) -> list:
+    """Retorna lista de mensagens de erro; lista vazia = válido."""
+    erros = []
+    linhas = meds_text.splitlines()
+    if len(linhas) > _MAX_MEDS_LINES:
+        erros.append(
+            f"Texto tem {len(linhas)} linhas — limite é {_MAX_MEDS_LINES}. "
+            "Remova linhas excedentes para não sobrepor a assinatura."
+        )
+    for i, linha in enumerate(linhas, 1):
+        if len(linha) > _MAX_MEDS_CHARS:
+            erros.append(
+                f"Linha {i} tem {len(linha)} caracteres (limite: {_MAX_MEDS_CHARS}): "
+                f'"{linha[:50]}{"..." if len(linha) > 50 else ""}"'
+            )
+    return erros
+
+
+@st.cache_data(show_spinner=False)
+def _cached_receita(nome: str, data: str, meds_text: str, vias: int) -> bytes:
+    return _gerar_receita_bytes(nome, data, meds_text.splitlines(), vias)
+
+
+@st.cache_data(show_spinner=False)
+def _cached_exames_particular(nome: str, exames_tuple: tuple) -> bytes:
+    return _gerar_exames_particular_bytes(nome, list(exames_tuple))
+
+
 st.set_page_config(page_title="LACS — Extrator de Exames", layout="centered")
 
 st.markdown("""
@@ -165,7 +229,7 @@ if st.query_params.get("show_config_exames") == "1":
 if st.session_state.page == "home":
     st.title("LABORATÓRIO CENTRAL DE SALVADOR")
     st.write("")
-    c1, c2 = st.columns(2)
+    c1, c2, c3 = st.columns(3)
     with c1:
         if st.button("Extrair", use_container_width=True):
             st.session_state.page = "extrator"
@@ -175,6 +239,110 @@ if st.session_state.page == "home":
             st.session_state.page = "solicitar"
             st.session_state.solicitar_initialized = False
             st.rerun()
+    with c3:
+        if st.button("Receita", use_container_width=True):
+            st.session_state.page = "receita"
+            st.rerun()
+    st.stop()
+
+# ── RECEITA ───────────────────────────────────────────────────────────────────
+if st.session_state.page == "receita":
+    if "rec_nome_count" not in st.session_state:
+        st.session_state.rec_nome_count = 0
+    if "rec_meds_count" not in st.session_state:
+        st.session_state.rec_meds_count = 0
+
+    st.title("Receituário")
+
+    if st.button("Voltar", key="voltar_rec_top"):
+        st.session_state.page = "home"
+        st.rerun()
+
+    nome_rec = st.text_input("Nome", key=f"nome_rec_{st.session_state.rec_nome_count}")
+
+    _data_key = f"data_rec_{st.session_state.rec_nome_count}"
+    if _data_key not in st.session_state:
+        st.session_state[_data_key] = _date.today().strftime("%d/%m/%Y")
+    data_rec = st.text_input("Data", key=_data_key)
+
+    _placeholder = (
+        "Losartano 50mg ----------------------------------------- contínuo\n"
+        "Uso: 01 cp, via oral, de 12/12 horas.\n"
+        "\n"
+        "Hidroclorotiazida 25mg ---------------------------------- contínuo\n"
+        "Uso: 01 cp, via oral, de manhã.\n"
+        "\n"
+        "... (até 8 medicamentos)"
+    )
+    meds_text = st.text_area(
+        "Medicações",
+        key=f"meds_rec_{st.session_state.rec_meds_count}",
+        placeholder=_placeholder,
+        height=420,
+        help="Cada medicamento em 2 linhas (nome + posologia). Linha em branco entre eles.",
+    )
+
+    # ── contador em tempo real ────────────────────────────────────────────────
+    _linhas_atual = meds_text.splitlines() if meds_text else []
+    _n_linhas = len(_linhas_atual)
+    _max_chars_atual = max((len(l) for l in _linhas_atual), default=0)
+    _cor_linhas = "red" if _n_linhas > _MAX_MEDS_LINES else ("orange" if _n_linhas >= _MAX_MEDS_LINES - 2 else "gray")
+    _cor_chars  = "red" if _max_chars_atual > _MAX_MEDS_CHARS else "gray"
+    st.markdown(
+        f"<small style='color:{_cor_linhas}'>Linhas: {_n_linhas}/{_MAX_MEDS_LINES}</small>"
+        f"&nbsp;&nbsp;&nbsp;"
+        f"<small style='color:{_cor_chars}'>Maior linha: {_max_chars_atual}/{_MAX_MEDS_CHARS} chars</small>",
+        unsafe_allow_html=True,
+    )
+
+    # ── validação (erros controlam botões; contador acima sinaliza visualmente)
+    _erros = _validate_meds(meds_text) if meds_text.strip() else []
+
+    # 2 vias: sempre liberado (formulário em branco permitido); bloqueia só se há erros
+    # 1 via:  exige nome; formulário sem medicação é permitido; bloqueia se há erros
+    can_1via  = bool(nome_rec.strip()) and not _erros
+    can_2vias = not _erros
+
+    if can_1via:
+        pdf_1via  = _cached_receita(nome_rec.strip(), data_rec.strip(), meds_text, 1)
+    if can_2vias:
+        pdf_2vias = _cached_receita(nome_rec.strip(), data_rec.strip(), meds_text, 2)
+
+    rb1, rb2, rb3, rb4 = st.columns(4)
+    with rb1:
+        if can_1via:
+            st.download_button(
+                "1 via",
+                data=pdf_1via,
+                file_name="receita_1via.pdf",
+                mime="application/pdf",
+                use_container_width=True,
+            )
+        else:
+            st.download_button("1 via", data=b"", file_name="receita_1via.pdf",
+                               mime="application/pdf", use_container_width=True, disabled=True)
+    with rb2:
+        if can_2vias:
+            st.download_button(
+                "2 vias",
+                data=pdf_2vias,
+                file_name="receita_2vias.pdf",
+                mime="application/pdf",
+                use_container_width=True,
+            )
+        else:
+            st.download_button("2 vias", data=b"", file_name="receita_2vias.pdf",
+                               mime="application/pdf", use_container_width=True, disabled=True)
+    with rb3:
+        if st.button("Limpar medicações", key="limpar_meds_rec", use_container_width=True):
+            st.session_state.rec_meds_count += 1
+            st.rerun()
+    with rb4:
+        if st.button("Limpar Tudo", key="limpar_tudo_rec", use_container_width=True):
+            st.session_state.rec_nome_count += 1
+            st.session_state.rec_meds_count += 1
+            st.rerun()
+
     st.stop()
 
 # ── SOLICITAR ─────────────────────────────────────────────────────────────────
@@ -182,6 +350,8 @@ if st.session_state.page == "solicitar":
     if not st.session_state.get("solicitar_initialized", False):
         for _e in EXAMES:
             st.session_state[f"chk_{_e}"] = _e in INICIAL
+        for _esp in EXAMES_ESPECIAIS:
+            st.session_state[f"chk_esp_{_esp}"] = False
         st.session_state.solicitar_initialized = True
 
     st.title("Solicitação de Exame")
@@ -218,22 +388,41 @@ if st.session_state.page == "solicitar":
         if st.button("Inicial", key="preset_inicial", use_container_width=True):
             for _e in EXAMES:
                 st.session_state[f"chk_{_e}"] = _e in INICIAL
+            for _esp in EXAMES_ESPECIAIS:
+                st.session_state[f"chk_esp_{_esp}"] = False
             st.rerun()
     with pc2:
         if st.button("Rotina básica", key="preset_rotina", use_container_width=True):
             for _e in EXAMES:
                 st.session_state[f"chk_{_e}"] = _e in ROTINA_BASICA
+            for _esp in EXAMES_ESPECIAIS:
+                st.session_state[f"chk_esp_{_esp}"] = False
             st.rerun()
     with pc3:
         if st.button("Saúde do homem", key="preset_homem", use_container_width=True):
             for _e in EXAMES:
                 st.session_state[f"chk_{_e}"] = _e in SAUDE_HOMEM
+            for _esp in EXAMES_ESPECIAIS:
+                st.session_state[f"chk_esp_{_esp}"] = False
             st.rerun()
     with pc4:
         if st.button("Limpar", key="preset_limpar", use_container_width=True):
             for _e in EXAMES:
                 st.session_state[f"chk_{_e}"] = False
+            for _esp in EXAMES_ESPECIAIS:
+                st.session_state[f"chk_esp_{_esp}"] = False
             st.rerun()
+    # ── Exames especiais (particular/plano) ──────────────────────────────────
+    st.markdown("---")
+    checks_esp = {}
+    for _esp in EXAMES_ESPECIAIS:
+        checks_esp[_esp] = st.checkbox(
+            f"{_esp} *(somente particular/plano de saúde)*",
+            key=f"chk_esp_{_esp}",
+        )
+    st.markdown("---")
+
+    # ── Exames regulares ──────────────────────────────────────────────────────
     ec1, ec2, ec3 = st.columns(3)
     checks = {}
     for i, exam in enumerate(EXAMES):
@@ -241,23 +430,46 @@ if st.session_state.page == "solicitar":
         with col:
             checks[exam] = st.checkbox(exam, key=f"chk_{exam}")
 
-    selecionados = [e for e, v in checks.items() if v]
+    selecionados_sus  = [e for e, v in checks.items() if v]
+    selecionados_esp  = [e for e, v in checks_esp.items() if v]
+    selecionados_part = selecionados_sus + selecionados_esp
+
     dados = {
         "nome": nome,
         "doc": doc,
         "endereco": endereco,
     }
-    pdf_bytes = gerar_pdf_solicitacao(dados, selecionados)
-    bot1, bot2 = st.columns(2)
+    pdf_sus = gerar_pdf_solicitacao(dados, selecionados_sus)
+
+    bot1, bot2, bot3 = st.columns(3)
     with bot1:
         st.download_button(
-            "Gerar PDF",
-            data=pdf_bytes,
-            file_name="solicitacao.pdf",
+            "Exames SUS",
+            data=pdf_sus,
+            file_name="solicitacao_sus.pdf",
             mime="application/pdf",
             use_container_width=True,
         )
     with bot2:
+        if selecionados_part:
+            pdf_part = _cached_exames_particular(nome.strip(), tuple(selecionados_part))
+            st.download_button(
+                "Exames Particular",
+                data=pdf_part,
+                file_name="solicitacao_particular.pdf",
+                mime="application/pdf",
+                use_container_width=True,
+            )
+        else:
+            st.download_button(
+                "Exames Particular",
+                data=b"",
+                file_name="solicitacao_particular.pdf",
+                mime="application/pdf",
+                use_container_width=True,
+                disabled=True,
+            )
+    with bot3:
         if st.button("Voltar", key="voltar_sol_bot", use_container_width=True):
             st.session_state.page = "home"
             st.rerun()
