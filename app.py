@@ -242,15 +242,20 @@ if st.session_state.page == "home":
     with c3:
         if st.button("Receita", use_container_width=True):
             st.session_state.page = "receita"
+            st.session_state.receita_initialized = False
             st.rerun()
     st.stop()
 
 # ── RECEITA ───────────────────────────────────────────────────────────────────
 if st.session_state.page == "receita":
-    if "rec_nome_count" not in st.session_state:
+    if not st.session_state.get("receita_initialized", False):
+        # Limpa chaves antigas para forçar re-inicialização dos campos
+        for _k in list(st.session_state.keys()):
+            if _k.startswith(("nome_rec_", "data_rec_", "meds_rec_")):
+                del st.session_state[_k]
         st.session_state.rec_nome_count = 0
-    if "rec_meds_count" not in st.session_state:
         st.session_state.rec_meds_count = 0
+        st.session_state.receita_initialized = True
 
     st.title("Receituário")
 
@@ -262,22 +267,27 @@ if st.session_state.page == "receita":
 
     _data_key = f"data_rec_{st.session_state.rec_nome_count}"
     if _data_key not in st.session_state:
-        st.session_state[_data_key] = _date.today().strftime("%d/%m/%Y")
+        # Primeira entrada na sessão → preenche com hoje; após "Limpar Tudo" → em branco
+        st.session_state[_data_key] = (
+            _date.today().strftime("%d/%m/%Y")
+            if st.session_state.rec_nome_count == 0
+            else ""
+        )
     data_rec = st.text_input("Data", key=_data_key)
 
-    _placeholder = (
-        "Losartano 50mg ----------------------------------------- contínuo\n"
-        "Uso: 01 cp, via oral, de 12/12 horas.\n"
-        "\n"
-        "Hidroclorotiazida 25mg ---------------------------------- contínuo\n"
-        "Uso: 01 cp, via oral, de manhã.\n"
-        "\n"
-        "... (até 8 medicamentos)"
+    _EXEMPLO_MEDS = (
+        "Losartano 50mg -------------------- contínuo\n"
+        "Uso: 01 cp, via oral, de 12/12 horas."
     )
+    _meds_key = f"meds_rec_{st.session_state.rec_meds_count}"
+    if _meds_key not in st.session_state:
+        # Primeira entrada na sessão → exemplo Losartano; após "Limpar" → em branco
+        st.session_state[_meds_key] = (
+            _EXEMPLO_MEDS if st.session_state.rec_meds_count == 0 else ""
+        )
     meds_text = st.text_area(
         "Medicações",
-        key=f"meds_rec_{st.session_state.rec_meds_count}",
-        placeholder=_placeholder,
+        key=_meds_key,
         height=420,
         help="Cada medicamento em 2 linhas (nome + posologia). Linha em branco entre eles.",
     )
