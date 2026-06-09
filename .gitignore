@@ -8,6 +8,7 @@ __pycache__/
 
 # Debug / dev output
 *.txt
+!requirements.txt
 *.json
 exames-json/
 exames-lacs/
